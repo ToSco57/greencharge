@@ -33,7 +33,7 @@ async function getPartnerToken() {
       grant_type: "client_credentials",
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET,
-      scope: "vehicle_cmds"
+      scope: "openid offline_access vehicle_device_data vehicle_state vehicle_cmds vehicle_charging_cmds"
     }),
     { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
   );
