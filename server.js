@@ -1,48 +1,98 @@
 import express from "express";
-import fs from "fs";
-import jwt from "jsonwebtoken";
 import axios from "axios";
+import { SignJWT, importPKCS8 } from "jose";
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
+// =====================
+// ENV
+// =====================
+const {
+  CLIENT_ID,
+  CLIENT_SECRET,
+  PRIVATE_KEY,
+  AUDIENCE,
+  TESLA_AUTH_URL
+} = process.env;
 
-// Legge la chiave privata Tesla dal Secret File di Render
-const privateKey = fs.readFileSync(process.env.PRIVATE_KEY, "utf8");
+// =====================
+// PARTNER TOKEN
+// =====================
+let cachedToken = null;
+let tokenExpiresAt = 0;
 
-// Funzione per creare JWT ES256 per Tesla Fleet API
-function createTeslaJWT(aud = "https://fleet-api.tesla.com") {
-  const payload = {
-    aud,
-    iat: Math.floor(Date.now() / 1000)
-  };
-  return jwt.sign(payload, privateKey, { algorithm: "ES256", expiresIn: "5m" });
+async function getPartnerToken() {
+  if (cachedToken && Date.now() < tokenExpiresAt) {
+    return cachedToken;
+  }
+
+  const res = await axios.post(
+    `${TESLA_AUTH_URL}/oauth2/v3/token`,
+    new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      scope: "vehicle_cmds"
+    }),
+    { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+  );
+
+  cachedToken = res.data.access_token;
+  tokenExpiresAt = Date.now() + (res.data.expires_in - 60) * 1000;
+
+  return cachedToken;
 }
 
-// Endpoint di test semplice
-app.get("/", (req, res) => {
-  res.send("Proxy Tesla pronto!");
-});
+// =====================
+// SIGN COMMAND
+// =====================
+async function signCommand(vehicleId, command) {
+  const key = await importPKCS8(PRIVATE_KEY, "ES256");
 
-// Endpoint demo comando
+  return new SignJWT({
+    aud: AUDIENCE,
+    sub: vehicleId,
+    cmd: command
+  })
+    .setProtectedHeader({ alg: "ES256" })
+    .setIssuedAt()
+    .setExpirationTime("2m")
+    .sign(key);
+}
+
+// =====================
+// ENDPOINT
+// =====================
 app.post("/command/:vehicleId/:command", async (req, res) => {
-  const { vehicleId, command } = req.params;
-  const token = createTeslaJWT();
-
   try {
+    const { vehicleId, command } = req.params;
+
+    const token = await getPartnerToken();
+    const jwt = await signCommand(vehicleId, command);
+
     const response = await axios.post(
-      `https://owner-api.teslamotors.com/api/1/vehicles/${vehicleId}/command/${command}`,
-      {}, // payload vuoto; alcuni comandi richiedono dati
-      { headers: { Authorization: `Bearer ${token}` } }
+      `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleId}/command/${command}`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Tesla-Command-Signature": jwt
+        }
+      }
     );
+
     res.json(response.data);
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).json({ error: "Errore invio comando" });
+    res.status(500).json({
+      error: err.message,
+      details: err.response?.data
+    });
   }
 });
 
+// =====================
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server in ascolto su porta ${PORT}`);
+  console.log("Server running on port", PORT);
 });
