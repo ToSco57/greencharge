@@ -1,6 +1,6 @@
 import express from "express";
 import axios from "axios";
-import { SignJWT, importPKCS8 } from "jose";
+import { SignJWT, importPKCS8, exportJWK } from "jose";
 
 const app = express();
 app.use(express.json());
@@ -15,6 +15,32 @@ const {
   AUDIENCE,
   TESLA_AUTH_URL
 } = process.env;
+
+// =====================
+// HOME (solo per debug umano)
+// =====================
+app.get("/", (req, res) => {
+  res.send("Greencharge Tesla Proxy OK");
+});
+
+// =====================
+// JWKS (QUESTO È QUELLO CHE TESLA CONTROLLA)
+// =====================
+app.get("/.well-known/jwks.json", async (req, res) => {
+  try {
+    const privateKeyPem = PRIVATE_KEY.replace(/\\n/g, "\n");
+    const key = await importPKCS8(privateKeyPem, "ES256");
+    const jwk = await exportJWK(key);
+
+    jwk.use = "sig";
+    jwk.alg = "ES256";
+    jwk.kid = "greencharge-key-1";
+
+    res.json({ keys: [jwk] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // =====================
 // PARTNER TOKEN
@@ -33,7 +59,8 @@ async function getPartnerToken() {
       grant_type: "client_credentials",
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET,
-      scope: "openid offline_access vehicle_device_data vehicle_state vehicle_cmds vehicle_charging_cmds"
+      scope:
+        "openid offline_access vehicle_device_data vehicle_state vehicle_cmds vehicle_charging_cmds"
     }),
     { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
   );
@@ -48,7 +75,8 @@ async function getPartnerToken() {
 // SIGN COMMAND
 // =====================
 async function signCommand(vehicleId, command) {
-  const key = await importPKCS8(PRIVATE_KEY, "ES256");
+  const privateKeyPem = PRIVATE_KEY.replace(/\\n/g, "\n");
+  const key = await importPKCS8(privateKeyPem, "ES256");
 
   return new SignJWT({
     aud: AUDIENCE,
@@ -62,7 +90,7 @@ async function signCommand(vehicleId, command) {
 }
 
 // =====================
-// ENDPOINT
+// COMMAND ENDPOINT
 // =====================
 app.post("/command/:vehicleId/:command", async (req, res) => {
   try {
