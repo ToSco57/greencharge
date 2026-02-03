@@ -43,7 +43,31 @@ app.get("/.well-known/jwks.json", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+import fs from "fs";
+import path from "path";
 
+// =====================
+// TESLA PARTNER PUBLIC KEY (PEM)
+// =====================
+app.get(
+  "/.well-known/appspecific/com.tesla.3p.public-key.pem",
+  (req, res) => {
+    try {
+      const keyPath = path.join(
+        process.cwd(),
+        "keys",
+        "tesla-public-key.pem"
+      );
+
+      const pem = fs.readFileSync(keyPath, "utf8");
+
+      res.setHeader("Content-Type", "application/x-pem-file");
+      res.status(200).send(pem);
+    } catch (err) {
+      res.status(500).send("Public key not available");
+    }
+  }
+);
 // =====================
 // PARTNER TOKEN
 // =====================
