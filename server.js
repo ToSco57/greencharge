@@ -32,6 +32,8 @@ app.get("/.well-known/jwks.json", async (req, res) => {
     const key = await importPKCS8(privateKeyPem, "ES256");
     const jwk = await exportJWK(key);
 
+    // 🔥 RIMUOVI LA PRIVATE KEY
+    delete jwk.d;
     jwk.use = "sig";
     jwk.alg = "ES256";
     jwk.kid = "greencharge-key-1";
