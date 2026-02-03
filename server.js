@@ -116,18 +116,35 @@ async function signCommand(vehicleId, command) {
 }
 
 // =====================
-// COMMAND ENDPOINT
+// COMMAND ENDPOINT (aggiornato con ENV ACCOUNT_ID e VIN)
 // =====================
 app.post("/command/:vehicleId/:command", async (req, res) => {
   try {
-    const { vehicleId, command } = req.params;
+    const { command } = req.params;
 
+    // Legge VIN e ACCOUNT_ID dalle variabili d'ambiente
+    const vehicleVin = process.env.VIN;
+    const partnerAccountId = process.env.ACCOUNT_ID;
+
+    if (!vehicleVin || !partnerAccountId) {
+      return res.status(500).json({
+        error: "VIN or ACCOUNT_ID not set in environment variables"
+      });
+    }
+
+    // 1️⃣ Ottieni partner token
     const token = await getPartnerToken();
-    const jwt = await signCommand(vehicleId, command);
 
+    // 2️⃣ Firma JWT ES256
+    const jwt = await signCommand(vehicleVin, command);
+
+    // 3️⃣ Chiamata Fleet API con body corretto
     const response = await axios.post(
-      `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleId}/command/${command}`,
-      {},
+      `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/command/${command}`,
+      {
+        vin: vehicleVin,
+        account_id: partnerAccountId
+      },
       {
         headers: {
           Authorization: `Bearer ${token}`,
