@@ -23,7 +23,7 @@ const {
 // HOME (solo per debug umano)
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy OK");
+  res.send("Greencharge Tesla Proxy OK v3");
 });
 
 // =====================
