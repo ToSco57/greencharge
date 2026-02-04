@@ -151,7 +151,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
 
     // Chiamata Fleet API
     let response;
-    try {
+/*    try {
       response = await axios.post(
         url,
         { vin: vehicleVin, account_id: partnerAccountId },
@@ -167,7 +167,20 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
       console.error("❌ Errore Axios verso Tesla:", axiosErr.response?.data || axiosErr.message);
       throw new Error("Tesla API call failed");
     }
-
+*/
+    try {
+  response = await axios.post(url, body, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Tesla-Command-Signature": jwt,
+      "Content-Type": "application/json"
+    },
+    validateStatus: () => true // per vedere anche 404/500
+  });
+  console.log("Axios status:", response.status, "data:", response.data);
+} catch (err) {
+  console.error("Axios error:", err.message);
+}
     // Log finale dettagliato
     console.log("🎯 Comando inviato:");
     console.log({
