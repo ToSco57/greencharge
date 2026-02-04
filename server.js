@@ -24,7 +24,7 @@ const {
 // HOME
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy OK v8");
+  res.send("Greencharge Tesla Proxy OK v1");
 });
 
 // =====================
