@@ -23,7 +23,7 @@ const {
 // HOME (solo per debug umano)
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy OK v4");
+  res.send("Greencharge Tesla Proxy OK v5");
 });
 
 // =====================
@@ -121,6 +121,11 @@ async function signCommand(vehicleId, command) {
 // =====================
 // COMMAND ENDPOINT (aggiornato con ENV ACCOUNT_ID e VIN)
 // =====================
+app.post("/command/:vehicleId/:command", async (req, res) => {
+  console.log("🎯 ROUTE /command chiamata:", req.params);
+  res.json({ ok: true, params: req.params });
+});
+
 app.post("/command/:vehicleId/:command", async (req, res) => {
   try {
     const { command } = req.params;
