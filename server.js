@@ -21,10 +21,10 @@ const {
 } = process.env;
 
 // =====================
-// HOME (solo per debug umano)
+// HOME
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy OK v6");
+  res.send("Greencharge Tesla Proxy OK v7");
 });
 
 // =====================
@@ -50,7 +50,7 @@ app.get("/.well-known/jwks.json", async (req, res) => {
 });
 
 // =====================
-// TESLA PARTNER PUBLIC KEY (PEM)
+// Tesla public key
 // =====================
 app.get("/.well-known/appspecific/com.tesla.3p.public-key.pem", (req, res) => {
   try {
@@ -66,7 +66,7 @@ app.get("/.well-known/appspecific/com.tesla.3p.public-key.pem", (req, res) => {
 });
 
 // =====================
-// PARTNER TOKEN
+// Partner token
 // =====================
 let cachedToken = null;
 let tokenExpiresAt = 0;
@@ -94,7 +94,7 @@ async function getPartnerToken() {
     cachedToken = res.data.access_token;
     tokenExpiresAt = Date.now() + (res.data.expires_in - 60) * 1000;
 
-    console.log("✅ Partner token ottenuto:", cachedToken.slice(0,10) + "..."); // non stampare tutto
+    console.log("✅ Partner token ottenuto:", cachedToken.slice(0,10) + "...");
     return cachedToken;
   } catch (err) {
     console.error("❌ Errore ottenimento partner token:", err.response?.data || err.message);
@@ -103,7 +103,7 @@ async function getPartnerToken() {
 }
 
 // =====================
-// SIGN COMMAND
+// Sign command
 // =====================
 async function signCommand(vehicleId, command) {
   try {
@@ -121,7 +121,7 @@ async function signCommand(vehicleId, command) {
       .setExpirationTime("2m")
       .sign(key);
 
-    console.log("✅ Comando firmato:", jwt.slice(0,20) + "...");
+    console.log("✅ Comando firmato (JWT primi 20 char):", jwt.slice(0,20) + "...");
     return jwt;
   } catch (err) {
     console.error("❌ Errore firma comando:", err);
@@ -130,7 +130,7 @@ async function signCommand(vehicleId, command) {
 }
 
 // =====================
-// COMMAND ENDPOINT
+// Command endpoint
 // =====================
 app.post("/command/:vehicleId/:command", async (req, res) => {
   try {
@@ -140,31 +140,49 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
     const vehicleVin = VIN;
     const partnerAccountId = ACCOUNT_ID;
     const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
+
     console.log("VIN:", vehicleVin, "ACCOUNT_ID:", partnerAccountId, "COMMAND:", command, "URL:", url);
 
-    // 1️⃣ Partner token
+    // Partner token
     const token = await getPartnerToken();
 
-    // 2️⃣ Firma JWT
+    // Firma JWT
     const jwt = await signCommand(vehicleVin, command);
 
-    // 3️⃣ Chiamata Fleet API
-    const response = await axios.post(
-      url,
-      { vin: vehicleVin, account_id: partnerAccountId },
-      { headers: {
-          Authorization: `Bearer ${token}`,
-          "Tesla-Command-Signature": jwt,
-          "Content-Type": "application/json"
+    // Chiamata Fleet API
+    let response;
+    try {
+      response = await axios.post(
+        url,
+        { vin: vehicleVin, account_id: partnerAccountId },
+        { headers: {
+            Authorization: `Bearer ${token}`,
+            "Tesla-Command-Signature": jwt,
+            "Content-Type": "application/json"
+          }
         }
-      }
-    );
+      );
+      console.log("✅ Risposta Tesla ricevuta:", JSON.stringify(response.data));
+    } catch (axiosErr) {
+      console.error("❌ Errore Axios verso Tesla:", axiosErr.response?.data || axiosErr.message);
+      throw new Error("Tesla API call failed");
+    }
 
-    console.log("✅ Risposta Tesla:", response.data);
+    // Log finale dettagliato
+    console.log("🎯 Comando inviato:");
+    console.log({
+      vehicleVin,
+      command,
+      partnerAccountId,
+      token: token.slice(0,10) + "...",
+      jwt: jwt.slice(0,20) + "...",
+      response: response.data
+    });
+
     res.json(response.data);
 
   } catch (err) {
-    console.error("❌ Errore /command:", err.response?.data || err.message);
+    console.error("❌ Errore /command endpoint:", err.message);
     res.status(500).json({
       error: err.message,
       details: err.response?.data || "No additional data"
