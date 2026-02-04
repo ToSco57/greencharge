@@ -150,7 +150,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          "Tesla-Command-Signature": jwt
+          "Tesla-Command-Signature": jwt,
           "Content-Type": "application/json"
         }
       }
