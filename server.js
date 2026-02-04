@@ -23,7 +23,7 @@ const {
 // HOME (solo per debug umano)
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy OK v3");
+  res.send("Greencharge Tesla Proxy OK v4");
 });
 
 // =====================
@@ -128,7 +128,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
     // Legge VIN e ACCOUNT_ID dalle variabili d'ambiente
     const vehicleVin = VIN;
     const partnerAccountId = ACCOUNT_ID;
-    let url = "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}"
+    let url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
     console.log("VIN usato:", VIN);
     console.log("ACCOUNT_ID usato:", ACCOUNT_ID);
     console.log("COMMAND:", command);
