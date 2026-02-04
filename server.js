@@ -168,7 +168,14 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
       throw new Error("Tesla API call failed");
     }
 */
-    try {
+    // Decidi il body in base al comando
+let body;
+if (command === "charge_start") {
+  body = {}; // per charge_start non serve body
+} else {
+  body = { vin: vehicleVin, account_id: partnerAccountId };
+}
+try {
   response = await axios.post(url, body, {
     headers: {
       Authorization: `Bearer ${token}`,
