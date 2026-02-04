@@ -14,7 +14,9 @@ const {
   CLIENT_SECRET,
   PRIVATE_KEY,
   AUDIENCE,
-  TESLA_AUTH_URL
+  TESLA_AUTH_URL,
+  ACCOUNT_ID,
+  VIN
 } = process.env;
 
 // =====================
@@ -124,14 +126,13 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
     const { command } = req.params;
 
     // Legge VIN e ACCOUNT_ID dalle variabili d'ambiente
-    const vehicleVin = process.env.VIN;
-    const partnerAccountId = process.env.ACCOUNT_ID;
-
-    if (!vehicleVin || !partnerAccountId) {
-      return res.status(500).json({
-        error: "VIN or ACCOUNT_ID not set in environment variables"
-      });
-    }
+    const vehicleVin = VIN;
+    const partnerAccountId = ACCOUNT_ID;
+    let url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`
+    console.log("VIN usato:", VIN);
+    console.log("ACCOUNT_ID usato:", ACCOUNT_ID);
+    console.log("COMMAND:", command);
+    console.log("URL Tesla:", url);
 
     // 1️⃣ Ottieni partner token
     const token = await getPartnerToken();
@@ -141,7 +142,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
 
     // 3️⃣ Chiamata Fleet API con body corretto
     const response = await axios.post(
-      `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/command/${command}`,
+      `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`,
       {
         vin: vehicleVin,
         account_id: partnerAccountId
@@ -150,6 +151,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
         headers: {
           Authorization: `Bearer ${token}`,
           "Tesla-Command-Signature": jwt
+          "Content-Type": "application/json"
         }
       }
     );
