@@ -154,7 +154,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
     console.log("🔗 URL:", url);
 
     const token = await getPartnerToken();
-    const jwt = await signCommand(vehicleVin);
+    const jwt = await signCommand(vehicleVin, command);
 
     const response = await axios.post(
       url,
