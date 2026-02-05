@@ -27,7 +27,7 @@ const {
 // HOME
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy v7");
+  res.send("Greencharge Tesla Proxy v8");
 });
 
 // =====================
@@ -118,7 +118,10 @@ async function signCommand(vehicleVin) {
     const key = await importPKCS8(privateKeyPem, "ES256");
 
     const jwt = await new SignJWT({})
-      .setProtectedHeader({ alg: "ES256" })
+      .setProtectedHeader({ 
+        alg: "ES256", 
+        kid: "greencharge-key-1"                  
+      })
       .setIssuer(ACCOUNT_ID)
       .setSubject(vehicleVin)
       .setAudience(AUDIENCE)
@@ -146,7 +149,7 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
 //    const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
 //    const url = `https://fleet-api.prd.eu.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
 //    const url = `https://fleet-api.prd.eu.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
-      const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
+      const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/signed_command`;
     console.log("🚀 Comando:", command);
     console.log("🔗 URL:", url);
 
@@ -155,7 +158,10 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
 
     const response = await axios.post(
       url,
-      {}, // BODY SEMPRE VUOTO
+      {
+        // Tesla si aspetta che il comando sia specificato qui se usi signed_command
+        "routable_message": jwt
+      },
       {
         headers: {
           Authorization: `Bearer ${token}`,
