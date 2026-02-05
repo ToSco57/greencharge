@@ -26,7 +26,7 @@ const {
 // HOME
 // =====================
 app.get("/", (req, res) => {
-  res.send("Greencharge Tesla Proxy v2");
+  res.send("Greencharge Tesla Proxy v4");
 });
 
 // =====================
@@ -141,10 +141,10 @@ app.post("/command/:vehicleId/:command", async (req, res) => {
     const { command } = req.params;
 
     const vehicleVin = VIN;
-//    const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
+    const url = `https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/vehicles/1689143039551197/commands/${command}`;
 //    const url = `https://fleet-api.prd.eu.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
 //    const url = `https://fleet-api.prd.eu.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
-    const url = `https://fleet-api.prd.na.cloud.tesla.com/api/1/vehicles/${vehicleVin}/commands/${command}`;
+//    const url = `https://fleet-api.prd.na.cloud.tesla.com/api/1/vehicles/1689143039551197/commands/${command}`;
     console.log("🚀 Comando:", command);
     console.log("🔗 URL:", url);
 
