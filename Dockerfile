@@ -16,4 +16,5 @@ COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 EXPOSE 10000
 
 # Avvio del proxy: legge la chiave dai Secret Files di Render
-CMD ["tesla-http-proxy", "-port", "10000", "-key-file", "/etc/secrets/private.pem"]
+# Usa la variabile d'ambiente PORT che Render assegna automaticamente
+CMD ["sh", "-c", "tesla-http-proxy -port ${PORT:-10000} -key-file /etc/secrets/private.pem"]
