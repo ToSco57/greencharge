@@ -13,7 +13,7 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
 # Espone la porta HTTPS per Render
-EXPOSE 443
+EXPOSE 10000
 
 # Avvio del proxy: legge la chiave dai Secret Files di Render
-CMD ["tesla-http-proxy", "-addr", ":443", "-key-file", "/etc/secrets/private.pem"]
+CMD ["tesla-http-proxy", "-addr", ":10000", "-key-file", "/etc/secrets/private.pem"]
