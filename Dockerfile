@@ -1,5 +1,5 @@
-# Usa Go per compilare il proxy ufficiale Tesla
-FROM golang:1.21-alpine AS builder
+# Usa Go 1.23 per soddisfare i nuovi requisiti di Tesla
+FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 # Scarica il codice sorgente ufficiale di Tesla
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
