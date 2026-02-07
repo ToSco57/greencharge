@@ -9,12 +9,12 @@ RUN apk add --no-cache ca-certificates openssl nginx
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# Configurazione Nginx con priorità assoluta (^~)
+# Configurazione Nginx
 RUN echo 'server { \
     listen 10000; \
     location ^~ /.well-known/appspecific/com.tesla.3p.json { \
         alias /var/www/html/tesla.json; \
-        default_type application/json; \
+        add_header Content-Type application/json; \
         add_header Access-Control-Allow-Origin *; \
     } \
     location / { \
@@ -26,8 +26,14 @@ RUN echo 'server { \
 
 EXPOSE 10000
 
+# Script che pulisce il file .pem e crea il JSON
 CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
     mkdir -p /var/www/html && \
-    echo \"{\\\"public_key\\\":\\\"$(cat /etc/secrets/public.pub)\\\"}\" > /var/www/html/tesla.json && \
-    nginx -g 'daemon on;' && \
+    if [ -f /etc/secrets/public.pem ]; then \
+        PUB_KEY=$(grep -v '^-' /etc/secrets/public.pem | tr -d '\n\r'); \
+        echo \"{\\\"public_key\\\":\\\"$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \
+    else \
+        echo '{\"error\":\"file public.pem missing\"}' > /var/www/html/tesla.json; \
+    fi && \
+    nginx && \
     tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose"]
