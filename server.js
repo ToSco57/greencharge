@@ -12,7 +12,7 @@ EXPOSE 10000
 
 CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
     tesla-http-proxy \
-    -port ${PORT:-10000} \
+    -port 10000 \
     -host 0.0.0.0 \
     -key-file /etc/secrets/private.pem \
     -tls-key /tmp/tls.key \
