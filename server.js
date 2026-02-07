@@ -10,8 +10,9 @@ COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
 EXPOSE 10000
 
-# Genera i certificati TLS necessari e avvia il proxy sui parametri corretti
-CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
+# Aggiunta stampa versione per debug
+CMD ["sh", "-c", "echo '--- DEPLOY VERSION: 2.0 - NO-HTTP-FLAG ---' && \
+    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
     tesla-http-proxy \
     -port 10000 \
     -host 0.0.0.0 \
