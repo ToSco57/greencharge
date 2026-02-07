@@ -37,6 +37,7 @@ CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve
         PUB_KEY=$(grep -v '^-' /etc/secrets/public.pem | tr -d '\n\r'); \
         echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \
         cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
+        chmod 644 /var/www/html/tesla.json /var/www/html/com.tesla.3p.public-key.pem; \
     else \
         echo '{\"error\":\"file public.pem missing\"}' > /var/www/html/tesla.json; \
     fi && \
