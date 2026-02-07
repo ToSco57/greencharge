@@ -25,4 +25,5 @@ CMD ["sh", "-c", "tesla-http-proxy \
     -port ${PORT:-10000} \
     -host 0.0.0.0 \
     -key-file /etc/secrets/private.pem \
+    -tls-terminated \
     -verbose"]
