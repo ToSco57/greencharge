@@ -11,12 +11,13 @@ COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 EXPOSE 10000
 
 # Usiamo una cartella fissa per i certificati e li generiamo all'avvio
+# Usa questo CMD finale nel tuo Dockerfile
 CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
+    echo '--- PROXY STARTING ---' && \
     tesla-http-proxy \
-    -port ${PORT:-10000} \
+    -port 10000 \
     -host 0.0.0.0 \
     -key-file /etc/secrets/private.pem \
     -tls-key /tmp/tls.key \
     -cert /tmp/tls.crt \
-    -allow-http \
     -verbose"]
