@@ -18,4 +18,5 @@ CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve
     -key-file /etc/secrets/private.pem \
     -tls-key /tmp/tls.key \
     -cert /tmp/tls.crt \
+    -allow-http \
     -verbose"]
