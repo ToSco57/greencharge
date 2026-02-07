@@ -1,23 +1,21 @@
 FROM golang:1.23-alpine AS builder
-RUN apk add --no-cache git openssl
+RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
 WORKDIR /app
 RUN go install ./cmd/tesla-http-proxy
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates openssl
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
 EXPOSE 10000
 
-# Usiamo una cartella fissa per i certificati e li generiamo all'avvio
-# Usa questo CMD finale nel tuo Dockerfile
-CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
-    echo '--- PROXY STARTING ---' && \
+# Rimuoviamo i flag -tls-key e -cert. 
+# Il proxy ora accetterà HTTP internamente (quello che vuole Render)
+# ma Render lo esporrà comunque in HTTPS all'esterno.
+CMD ["sh", "-c", "echo '--- DEPLOY VERSION: HTTP-INTERNAL ---' && \
     tesla-http-proxy \
     -port 10000 \
     -host 0.0.0.0 \
     -key-file /etc/secrets/private.pem \
-    -tls-key /tmp/tls.key \
-    -cert /tmp/tls.crt \
     -verbose"]
