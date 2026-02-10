@@ -9,28 +9,36 @@ RUN apk add --no-cache ca-certificates openssl nginx
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# Configurazione Nginx aggiornata per servire anche il .pem
+# Configurazione Nginx: aggiunta la gestione per /callback
 RUN echo 'server { \
     listen 10000; \
+    # Serve il JSON per l'accoppiamento \
     location ^~ /.well-known/appspecific/com.tesla.3p.json { \
         alias /var/www/html/tesla.json; \
         add_header Content-Type application/json; \
         add_header Access-Control-Allow-Origin *; \
     } \
+    # Serve la chiave pubblica \
     location ^~ /.well-known/appspecific/com.tesla.3p.public-key.pem { \
         alias /var/www/html/com.tesla.3p.public-key.pem; \
         add_header Content-Type text/plain; \
     } \
+    # NUOVO: Gestisce il ritorno da Tesla Auth \
+    location /callback { \
+        default_type text/html; \
+        return 200 "<html><body><h1>Accesso Autorizzato</h1><p>Copia il codice presente nella barra degli indirizzi (dopo code=) e torna nel terminale.</p></body></html>"; \
+    } \
+    # Tutto il resto va al proxy Tesla \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
         proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
     } \
 }' > /etc/nginx/http.d/default.conf
 
 EXPOSE 10000
 
-# Script aggiornato con campo domain e copia della chiave pubblica grezza
 CMD ["sh", "-c", "openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
     mkdir -p /var/www/html && \
     if [ -f /etc/secrets/public.pem ]; then \
