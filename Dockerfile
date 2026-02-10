@@ -23,7 +23,7 @@ RUN echo 'server { \
     } \
     location /callback { \
         if ($arg_code) { \
-            return 302 teslaproxy://auth?code=$arg_code; \
+            return 302 greencharge://auth?code=$arg_code; \
         } \
         return 200 "Codice non trovato"; \
     } \
