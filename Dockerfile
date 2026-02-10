@@ -9,26 +9,24 @@ RUN apk add --no-cache ca-certificates openssl nginx
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# Configurazione Nginx: aggiunta la gestione per /callback
+# Configurazione Nginx con backslash corretti per ogni riga
 RUN echo 'server { \
     listen 10000; \
-    # Serve il JSON per l'accoppiamento \
     location ^~ /.well-known/appspecific/com.tesla.3p.json { \
         alias /var/www/html/tesla.json; \
         add_header Content-Type application/json; \
         add_header Access-Control-Allow-Origin *; \
     } \
-    # Serve la chiave pubblica \
     location ^~ /.well-known/appspecific/com.tesla.3p.public-key.pem { \
         alias /var/www/html/com.tesla.3p.public-key.pem; \
         add_header Content-Type text/plain; \
     } \
-    # NUOVO: Gestisce il ritorno da Tesla Auth \
     location /callback { \
-        default_type text/html; \
-        return 200 "<html><body><h1>Accesso Autorizzato</h1><p>Copia il codice presente nella barra degli indirizzi (dopo code=) e torna nel terminale.</p></body></html>"; \
+        if ($arg_code) { \
+            return 302 teslaproxy://auth?code=$arg_code; \
+        } \
+        return 200 "Codice non trovato"; \
     } \
-    # Tutto il resto va al proxy Tesla \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
