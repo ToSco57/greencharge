@@ -6,7 +6,6 @@ RUN go install ./cmd/tesla-http-proxy
 RUN go install ./cmd/tesla-control
 
 FROM alpine:latest
-# Usiamo sh invece di bash per massima compatibilità con Alpine
 RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests
 
 WORKDIR /app
@@ -14,7 +13,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. Creiamo lo script Python in modo diretto
+# 1. Script Python (Invariato)
 RUN printf 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
@@ -36,7 +35,7 @@ def update():\n\
 if __name__ == "__main__":\n\
     app.run(host="0.0.0.0", port=5000)' > /app/telemetry.py
 
-# 2. Creiamo lo script di avvio usando /bin/sh (standard Alpine)
+# 2. Script di avvio con FIX per l'autenticazione (Header forwarding)
 RUN printf "#!/bin/sh\n\
 echo \"server { \
     listen \${PORT}; \
@@ -47,6 +46,8 @@ echo \"server { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
         proxy_set_header Host \\\$host; \
+        proxy_set_header Authorization \\\$http_authorization; \
+        proxy_pass_header Authorization; \
     } \
 }\" > /etc/nginx/http.d/default.conf\n\
 \n\
@@ -64,5 +65,4 @@ exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private
 ENV PORT=10000
 EXPOSE 10000
 
-# Usiamo il percorso assoluto per sicurezza
 ENTRYPOINT ["/bin/sh", "/app/start.sh"]
