@@ -7,13 +7,12 @@ RUN go install ./cmd/tesla-http-proxy
 RUN go install ./cmd/tesla-control
 
 FROM alpine:latest
-# Installazione robusta per telemetria e gestione porte
 RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# Script Python Manager con i campi richiesti (In-Memory)
+# 1. Manager Telemetria in RAM
 RUN echo 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
@@ -22,46 +21,46 @@ data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "tim
 def get_data(): return jsonify(data_store)\n\
 @app.route("/update", methods=["POST"])\n\
 def update():\n\
-    try:\n\
-        content = request.json\n\
-        if content:\n\
-            # Mapping campi Tesla Fleet Telemetry\n\
-            data_store["battery_level"] = content.get("Soc", data_store["battery_level"])\n\
-            data_store["charge_current"] = content.get("ChargerActualCurrent", data_store["charge_current"])\n\
-            data_store["charge_voltage"] = content.get("ChargerVoltage", data_store["charge_voltage"])\n\
-            data_store["time_to_full"] = content.get("MinutesToFullCharge", data_store["time_to_full"])\n\
-            data_store["state"] = "online"\n\
-            data_store["last_update"] = datetime.datetime.now().isoformat()\n\
-        return "OK", 200\n\
-    except: return "Error", 400\n\
+    content = request.json\n\
+    if content:\n\
+        data_store.update({\n\
+            "battery_level": content.get("Soc", data_store["battery_level"]),\n\
+            "charge_current": content.get("ChargerActualCurrent", data_store["charge_current"]),\n\
+            "charge_voltage": content.get("ChargerVoltage", data_store["charge_voltage"]),\n\
+            "time_to_full": content.get("MinutesToFullCharge", data_store["time_to_full"]),\n\
+            "last_update": datetime.datetime.now().isoformat()\n\
+        })\n\
+    return "OK", 200\n\
 if __name__ == "__main__":\n\
-    app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
+    app.run(port=5000)' > /app/telemetry_manager.py
 
-# Script di avvio per gestire la porta dinamica di Render
-RUN echo '#!/bin/bash\n\
-# Configura Nginx con la porta di Render\n\
-echo "server { \
-    listen ${PORT}; \
+# 2. Script di avvio Dinamico (Entrypoint)
+RUN echo "#!/bin/bash\n\
+# Configura Nginx per usare la porta variabile di Render\n\
+echo \"server { \
+    listen \${PORT}; \
     location /telemetrydata { proxy_pass http://127.0.0.1:5000/; } \
     location /update-telemetry { proxy_pass http://127.0.0.1:5000/update; } \
     location ^~ /.well-known/appspecific/ { alias /var/www/html/; } \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
-        proxy_set_header Host \$host; \
+        proxy_set_header Host \\\$host; \
     } \
-}" > /etc/nginx/http.d/default.conf\n\
+}\" > /etc/nginx/http.d/default.conf\n\
 \n\
-openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj "/CN=localhost"\n\
+openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj \"/CN=localhost\"\n\
 mkdir -p /var/www/html\n\
 if [ -f /etc/secrets/public.pem ]; then \
-    PUB_KEY=$(grep -v "-" /etc/secrets/public.pem | tr -d "\\n\\r"); \
-    echo "{\"domain\":\"gc-53r0.onrender.com\",\"public_key\":\"$PUB_KEY\"}" > /var/www/html/com.tesla.3p.json; \
+    PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\n\\r'); \
+    echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/com.tesla.3p.json; \
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
 fi\n\
 nginx\n\
 python3 /app/telemetry_manager.py & \n\
-exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# Avvio del proxy: -host 0.0.0.0 e porta interna\n\
+exec tesla-http-proxy -port 10001 -host 0.0.0.0 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
 
+ENV PORT=10000
 EXPOSE 10000
-CMD ["/app/entrypoint.sh"]
+CMD ["/app/start.sh"]
