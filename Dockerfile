@@ -7,16 +7,17 @@ RUN go install ./cmd/tesla-http-proxy
 RUN go install ./cmd/tesla-control
 
 FROM alpine:latest
+# Installiamo bash e python per gestire la logica di avvio e telemetria
 RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. Manager Telemetria in RAM
+# 1. Script Python per la Telemetria in RAM (Porta 5000)
 RUN echo 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
-data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "unknown"}\n\
+data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "offline"}\n\
 @app.route("/")\n\
 def get_data(): return jsonify(data_store)\n\
 @app.route("/update", methods=["POST"])\n\
@@ -32,11 +33,11 @@ def update():\n\
         })\n\
     return "OK", 200\n\
 if __name__ == "__main__":\n\
-    app.run(port=5000)' > /app/telemetry_manager.py
+    app.run(host="0.0.0.0", port=5000)' > /app/telemetry.py
 
-# 2. Script di avvio Dinamico (Entrypoint)
+# 2. Script di avvio (Entrypoint) per Render
 RUN echo "#!/bin/bash\n\
-# Configura Nginx per usare la porta variabile di Render\n\
+# Configura Nginx sulla porta dinamica di Render\n\
 echo \"server { \
     listen \${PORT}; \
     location /telemetrydata { proxy_pass http://127.0.0.1:5000/; } \
@@ -51,16 +52,19 @@ echo \"server { \
 \n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj \"/CN=localhost\"\n\
 mkdir -p /var/www/html\n\
+\n\
 if [ -f /etc/secrets/public.pem ]; then \
     PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\n\\r'); \
     echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/com.tesla.3p.json; \
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
 fi\n\
+\n\
 nginx\n\
-python3 /app/telemetry_manager.py & \n\
-# Avvio del proxy: -host 0.0.0.0 e porta interna\n\
-exec tesla-http-proxy -port 10001 -host 0.0.0.0 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
+python3 /app/telemetry.py & \n\
+# Il proxy DEVE ascoltare su 127.0.0.1 perché Nginx gli fa da ponte\n\
+exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
 
+# Render usa PORT=10000 di default
 ENV PORT=10000
 EXPOSE 10000
 CMD ["/app/start.sh"]
