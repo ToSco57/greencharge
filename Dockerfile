@@ -1,4 +1,3 @@
-# docker con telemetria
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -7,17 +6,16 @@ RUN go install ./cmd/tesla-http-proxy
 RUN go install ./cmd/tesla-control
 
 FROM alpine:latest
-# Installiamo le dipendenze necessarie
-RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash
+# Usiamo sh invece di bash per massima compatibilità con Alpine
+RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests
 
-# CREIAMO LA CARTELLA APP E IMPOSTIAMOLA COME WORKDIR
 WORKDIR /app
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. Script Python per la Telemetria in RAM
-RUN echo 'from flask import Flask, jsonify, request\n\
+# 1. Creiamo lo script Python in modo diretto
+RUN printf 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
 data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "offline"}\n\
@@ -38,8 +36,8 @@ def update():\n\
 if __name__ == "__main__":\n\
     app.run(host="0.0.0.0", port=5000)' > /app/telemetry.py
 
-# 2. Script di avvio per Render
-RUN echo "#!/bin/bash\n\
+# 2. Creiamo lo script di avvio usando /bin/sh (standard Alpine)
+RUN printf "#!/bin/sh\n\
 echo \"server { \
     listen \${PORT}; \
     location /telemetrydata { proxy_pass http://127.0.0.1:5000/; } \
@@ -55,7 +53,7 @@ echo \"server { \
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj \"/CN=localhost\"\n\
 mkdir -p /var/www/html\n\
 if [ -f /etc/secrets/public.pem ]; then \
-    PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\n\\r'); \
+    PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\\\n\\\\r'); \
     echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/com.tesla.3p.json; \
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
 fi\n\
@@ -65,4 +63,6 @@ exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private
 
 ENV PORT=10000
 EXPOSE 10000
-CMD ["/app/start.sh"]
+
+# Usiamo il percorso assoluto per sicurezza
+ENTRYPOINT ["/bin/sh", "/app/start.sh"]
