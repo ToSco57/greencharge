@@ -1,4 +1,4 @@
-# TELEMETRIA INTEGRATA - Versione definitiva con Fix Persistente Certificati
+# TELEMETRIA INTEGRATA - Versione con FIX Header Authorization
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. SCRIPT PYTHON MANAGER (RAM)
+# TELEMETRIA: Script Manager per stato in RAM (Porta 5000)
 RUN printf 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
@@ -37,12 +37,17 @@ def update():\n\
 if __name__ == "__main__":\n\
     app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
-# 2. CONFIGURAZIONE NGINX
+# TELEMETRIA: Configurazione Nginx con FIX Autenticazione
 RUN echo 'server { \
     listen ${PORT}; \
+    # Permette header lunghi (token OAuth) \
+    client_header_buffer_size 64k; \
+    large_client_header_buffers 4 64k; \
+    \
     location ^~ /.well-known/appspecific/com.tesla.3p.json { \
         alias /var/www/html/tesla.json; \
         add_header Content-Type application/json; \
+        add_header Access-Control-Allow-Origin *; \
     } \
     location ^~ /.well-known/appspecific/com.tesla.3p.public-key.pem { \
         alias /var/www/html/com.tesla.3p.public-key.pem; \
@@ -59,33 +64,27 @@ RUN echo 'server { \
         proxy_ssl_verify off; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
+        \
+        # FIX CRUCIALE: Passa il token Bearer dal client al proxy Tesla \
         proxy_set_header Authorization $http_authorization; \
         proxy_pass_header Authorization; \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
-# 3. SCRIPT DI AVVIO DEDICATO (Per evitare subshell issues)
+# TELEMETRIA: Script di avvio entrypoint
 RUN printf '#!/bin/bash\n\
-# Generazione certificati in cartella locale\n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj "/CN=localhost"\n\
-\n\
 mkdir -p /var/www/html\n\
 envsubst "\${PORT}" < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf\n\
-\n\
 if [ -f /etc/secrets/public.pem ]; then \
     PUB_KEY=$(grep -v "-" /etc/secrets/public.pem | tr -d "\\n\\r"); \
     echo "{\\"domain\\":\\"gc-53r0.onrender.com\\",\\"public_key\\":\\"$PUB_KEY\\"}" > /var/www/html/tesla.json; \
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
 fi\n\
-\n\
 nginx\n\
 python3 /app/telemetry_manager.py & \n\
-\n\
-# Loop di controllo esistenza file prima del proxy\n\
 while [ ! -f /app/tls.crt ]; do sleep 1; done\n\
-\n\
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 EXPOSE 10000
-
 ENTRYPOINT ["/app/entrypoint.sh"]
