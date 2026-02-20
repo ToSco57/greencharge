@@ -1,4 +1,4 @@
-# TELEMETRIA: Gestione diretta Proxy + Python (No Nginx)
+# TELEMETRIA: Versione Diretta + Upstream a Flask
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -12,7 +12,7 @@ WORKDIR /app
 
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + GESTORE CHIAVI + CALLBACK
+# 1. MANAGER TELEMETRIA + CALLBACK + WELL-KNOWN (Python su porta 5000)
 RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
 import datetime, os\n\
 app = Flask(__name__)\n\
@@ -47,9 +47,9 @@ def callback():\n\
     return "Codice non trovato", 400\n\
 \n\
 if __name__ == "__main__":\n\
-    app.run(host="0.0.0.0", port=5000)' > /app/telemetry_manager.py
+    app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
-# 2. SCRIPT DI AVVIO (start.sh)
+# 2. SCRIPT DI AVVIO
 RUN printf "#!/bin/sh\n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'\n\
 mkdir -p /var/www/html\n\
@@ -58,11 +58,10 @@ if [ -f /etc/secrets/public.pem ]; then \n\
     echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \n\
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \n\
 fi\n\
-# Avvio Flask in background (Porta 5000)\n\
+# Avvio Flask\n\
 python3 /app/telemetry_manager.py & \n\
-# Avvio Proxy Tesla (Porta \$PORT assegnata da Render)\n\
-# Il proxy agira come server principale\n\
-exec tesla-http-proxy -port \$PORT -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
+# Avvio Proxy Tesla con UPSTREAM: inoltra a Flask tutto cio che non gestisce\n\
+exec tesla-http-proxy -port \$PORT -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -upstream-uri http://127.0.0.1:5000 -verbose" > /app/start.sh && chmod +x /app/start.sh
 
 EXPOSE 10000
 ENTRYPOINT ["/bin/sh", "/app/start.sh"]
