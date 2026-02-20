@@ -1,4 +1,4 @@
-# TELEMETRIA: Versione Diretta + Upstream a Flask
+# TELEMETRIA: Versione con Nginx Trasparente (Niente flag upstream-uri)
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -6,62 +6,73 @@ WORKDIR /app
 RUN go install ./cmd/tesla-http-proxy
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates openssl python3 py3-flask py3-requests bash
+RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash gettext
 
 WORKDIR /app
-
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + CALLBACK + WELL-KNOWN (Python su porta 5000)
+# 1. MANAGER TELEMETRIA (Porta 5000)
 RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
 import datetime, os\n\
 app = Flask(__name__)\n\
 data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "offline", "last_update": None}\n\
-\n\
 @app.route("/telemetrydata")\n\
 def get_data(): return jsonify(data_store)\n\
-\n\
 @app.route("/update-telemetry", methods=["POST"])\n\
 def update():\n\
     content = request.json\n\
-    if content:\n\
-        data_store.update({\n\
-            "battery_level": content.get("Soc", data_store["battery_level"]),\n\
-            "charge_current": content.get("ChargerActualCurrent", data_store["charge_current"]),\n\
-            "charge_voltage": content.get("ChargerVoltage", data_store["charge_voltage"]),\n\
-            "time_to_full": content.get("MinutesToFullCharge", data_store["time_to_full"]),\n\
-            "state": "online", "last_update": datetime.datetime.now().isoformat()\n\
-        })\n\
+    if content: data_store.update({"battery_level": content.get("Soc", data_store["battery_level"]), "state": "online", "last_update": datetime.datetime.now().isoformat()})\n\
     return "OK", 200\n\
-\n\
 @app.route("/.well-known/appspecific/com.tesla.3p.json")\n\
 def serve_json(): return send_from_directory("/var/www/html", "tesla.json")\n\
-\n\
-@app.route("/.well-known/appspecific/com.tesla.3p.public-key.pem")\n\
-def serve_pem(): return send_from_directory("/var/www/html", "com.tesla.3p.public-key.pem")\n\
-\n\
 @app.route("/callback")\n\
 def callback():\n\
     code = request.args.get("code")\n\
     if code: return f"<html><script>window.location.href=\"greencharge://auth?code={code}\";</script></html>", 200\n\
-    return "Codice non trovato", 400\n\
-\n\
+    return "Missing code", 400\n\
 if __name__ == "__main__":\n\
     app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
-# 2. SCRIPT DI AVVIO
-RUN printf "#!/bin/sh\n\
+# 2. CONFIGURAZIONE NGINX (Ponte Trasparente)
+RUN echo 'server { \
+    listen ${PORT}; \
+    \
+    # Percorsi Telemetria e Auth -> Flask \
+    location ~* ^/(telemetrydata|update-telemetry|callback|.well-known) { \
+        proxy_pass http://127.0.0.1:5000; \
+        proxy_set_header Host $host; \
+    } \
+    \
+    # Tutto il resto -> Proxy Tesla \
+    location / { \
+        proxy_pass https://127.0.0.1:10001; \
+        proxy_ssl_verify off; \
+        proxy_http_version 1.1; \
+        proxy_set_header Upgrade $http_upgrade; \
+        proxy_set_header Connection "upgrade"; \
+        proxy_set_header Host $host; \
+        \
+        # PASSAGGIO CRUCIALE: Passa l header Authorization cosi com e \
+        proxy_set_header Authorization $http_authorization; \
+        proxy_pass_header Authorization; \
+        \
+        # Disabilita il buffering per evitare timeout nei comandi \
+        proxy_buffering off; \
+    } \
+}' > /etc/nginx/http.d/default.conf.template
+
+# 3. SCRIPT DI AVVIO
+RUN printf "#!/bin/bash\n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'\n\
 mkdir -p /var/www/html\n\
+envsubst '\${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf\n\
 if [ -f /etc/secrets/public.pem ]; then \n\
     PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\\\n\\\\r'); \n\
     echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \n\
-    cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \n\
 fi\n\
-# Avvio Flask\n\
+nginx\n\
 python3 /app/telemetry_manager.py & \n\
-# Avvio Proxy Tesla con UPSTREAM: inoltra a Flask tutto cio che non gestisce\n\
-exec tesla-http-proxy -port \$PORT -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -upstream-uri http://127.0.0.1:5000 -verbose" > /app/start.sh && chmod +x /app/start.sh
+exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
 
 EXPOSE 10000
-ENTRYPOINT ["/bin/sh", "/app/start.sh"]
+ENTRYPOINT ["/bin/bash", "/app/start.sh"]
