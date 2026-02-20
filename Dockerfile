@@ -1,4 +1,4 @@
-# TELEMETRIA INTEGRATA - Gestione stato in RAM e proxy Tesla
+# TELEMETRIA INTEGRATA - Versione definitiva con Fix Persistente Certificati
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. SCRIPT PYTHON MANAGER (Stato in RAM)
+# 1. SCRIPT PYTHON MANAGER (RAM)
 RUN printf 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
@@ -64,20 +64,28 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
+# 3. SCRIPT DI AVVIO DEDICATO (Per evitare subshell issues)
+RUN printf '#!/bin/bash\n\
+# Generazione certificati in cartella locale\n\
+openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj "/CN=localhost"\n\
+\n\
+mkdir -p /var/www/html\n\
+envsubst "\${PORT}" < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf\n\
+\n\
+if [ -f /etc/secrets/public.pem ]; then \
+    PUB_KEY=$(grep -v "-" /etc/secrets/public.pem | tr -d "\\n\\r"); \
+    echo "{\\"domain\\":\\"gc-53r0.onrender.com\\",\\"public_key\\":\\"$PUB_KEY\\"}" > /var/www/html/tesla.json; \
+    cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
+fi\n\
+\n\
+nginx\n\
+python3 /app/telemetry_manager.py & \n\
+\n\
+# Loop di controllo esistenza file prima del proxy\n\
+while [ ! -f /app/tls.crt ]; do sleep 1; done\n\
+\n\
+exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+
 EXPOSE 10000
 
-# 3. CMD DI AVVIO ROBUSTO
-CMD ["sh", "-c", "\
-    openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /tmp/tls.key -out /tmp/tls.crt -days 365 -subj '/CN=localhost' && \
-    sleep 2 && \
-    mkdir -p /var/www/html && \
-    envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf && \
-    if [ -f /etc/secrets/public.pem ]; then \
-        PUB_KEY=$(grep -v '^-' /etc/secrets/public.pem | tr -d '\n\r'); \
-        echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \
-        cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
-    fi && \
-    nginx && \
-    python3 /app/telemetry_manager.py & \
-    exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /tmp/tls.key -cert /tmp/tls.crt -verbose \
-"]
+ENTRYPOINT ["/app/entrypoint.sh"]
