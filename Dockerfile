@@ -1,4 +1,4 @@
-# TELEMETRIA INTEGRATA - Versione con FIX Header Authorization
+# TELEMETRIA INTEGRATA - Versione con Tunneling Header Garantito
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# TELEMETRIA: Script Manager per stato in RAM (Porta 5000)
+# TELEMETRIA: Script Manager (RAM)
 RUN printf 'from flask import Flask, jsonify, request\n\
 import datetime\n\
 app = Flask(__name__)\n\
@@ -37,17 +37,17 @@ def update():\n\
 if __name__ == "__main__":\n\
     app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
-# TELEMETRIA: Configurazione Nginx con FIX Autenticazione
+# TELEMETRIA: Configurazione Nginx (FIX TOTALE OAUTH)
 RUN echo 'server { \
     listen ${PORT}; \
-    # Permette header lunghi (token OAuth) \
-    client_header_buffer_size 64k; \
-    large_client_header_buffers 4 64k; \
+    \
+    # Disabilita restrizioni sui nomi degli header \
+    underscores_in_headers on; \
+    pass_header Authorization; \
     \
     location ^~ /.well-known/appspecific/com.tesla.3p.json { \
         alias /var/www/html/tesla.json; \
         add_header Content-Type application/json; \
-        add_header Access-Control-Allow-Origin *; \
     } \
     location ^~ /.well-known/appspecific/com.tesla.3p.public-key.pem { \
         alias /var/www/html/com.tesla.3p.public-key.pem; \
@@ -60,30 +60,41 @@ RUN echo 'server { \
         proxy_pass http://127.0.0.1:5000/update; \
     } \
     location / { \
-        proxy_pass https://127.0.0.1:10001; \
+        # Usiamo localhost esplicito per evitare problemi di risoluzione \
+        proxy_pass https://localhost:10001; \
         proxy_ssl_verify off; \
+        \
+        # FORZATURA HEADER: Nginx deve passare tutto "as is" \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_set_header X-Forwarded-Proto $scheme; \
         \
-        # FIX CRUCIALE: Passa il token Bearer dal client al proxy Tesla \
+        # Passaggio del Token Bearer \
         proxy_set_header Authorization $http_authorization; \
-        proxy_pass_header Authorization; \
+        proxy_pass_request_headers on; \
+        \
+        # Evita timeout durante i comandi lunghi \
+        proxy_connect_timeout 90; \
+        proxy_send_timeout 90; \
+        proxy_read_timeout 90; \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
-# TELEMETRIA: Script di avvio entrypoint
+# Script Entrypoint
 RUN printf '#!/bin/bash\n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj "/CN=localhost"\n\
 mkdir -p /var/www/html\n\
 envsubst "\${PORT}" < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf\n\
 if [ -f /etc/secrets/public.pem ]; then \
     PUB_KEY=$(grep -v "-" /etc/secrets/public.pem | tr -d "\\n\\r"); \
-    echo "{\\"domain\\":\\"gc-53r0.onrender.com\\",\\"public_key\\":\\"$PUB_KEY\\"}" > /var/www/html/tesla.json; \
+    echo "{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"$PUB_KEY\\\"}" > /var/www/html/tesla.json; \
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem; \
 fi\n\
 nginx\n\
 python3 /app/telemetry_manager.py & \n\
 while [ ! -f /app/tls.crt ]; do sleep 1; done\n\
+# Ascolta su localhost (127.0.0.1) per sicurezza interna \
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 EXPOSE 10000
