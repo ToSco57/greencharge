@@ -20,22 +20,22 @@ app = Flask(__name__)\n\
 data_store = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "offline", "last_update": None}\n\
 @app.route("/telemetrydata")\n\
 def get_data(): return jsonify(data_store)\n\
-@app.route("/update-telemetry", methods=["POST"])
-def update():
-    global data_store
-    content = request.json
-    if content:
+@app.route("/update-telemetry", methods=["POST"])\n\
+def update():\n\
+    global data_store\n\
+    content = request.json\n\
+    if content:\n\
         # Mappatura completa di tutti i parametri
-        data_store.update({
-            "battery_level": content.get("Soc", data_store["battery_level"]),
-            "charge_current": content.get("ChargerActualCurrent", data_store["charge_current"]),
-            "charge_voltage": content.get("ChargerVoltage", data_store["charge_voltage"]),
-            "time_to_full": content.get("MinutesToFullCharge", data_store["time_to_full"]),
-            "state": content.get("state", "online"), # Se non specificato, lo mettiamo online
-            "last_update": datetime.datetime.now().isoformat()
-        })
-        return "OK", 200
-    return "No content", 400
+        data_store.update({\n\
+            "battery_level": content.get("Soc", data_store["battery_level"]),\n\
+            "charge_current": content.get("ChargerActualCurrent", data_store["charge_current"]),\n\
+            "charge_voltage": content.get("ChargerVoltage", data_store["charge_voltage"]),\n\
+            "time_to_full": content.get("MinutesToFullCharge", data_store["time_to_full"]),\n\
+            "state": content.get("state", "online"), # Se non specificato, lo mettiamo online\n\
+            "last_update": datetime.datetime.now().isoformat()\n\
+        })\n\
+        return "OK", 200\n\
+    return "No content", 400\n\
 @app.route("/.well-known/appspecific/com.tesla.3p.json")\n\
 def serve_json(): return send_from_directory("/var/www/html", "tesla.json")\n\
 @app.route("/callback")\n\
