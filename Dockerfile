@@ -1,17 +1,19 @@
-# TELEMETRIA: Versione con Nginx Trasparente (Niente flag upstream-uri)
+# TELEMETRIA: Fix Header Connection per Fleet API
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
 WORKDIR /app
 RUN go install ./cmd/tesla-http-proxy
+RUN go install ./cmd/tesla-control
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash gettext
 
 WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
+COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA (Porta 5000)
+# 1. MANAGER TELEMETRIA
 RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
 import datetime, os\n\
 app = Flask(__name__)\n\
@@ -33,35 +35,32 @@ def callback():\n\
 if __name__ == "__main__":\n\
     app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
-# 2. CONFIGURAZIONE NGINX (Ponte Trasparente)
+# 2. CONFIGURAZIONE NGINX (Rimosso Upgrade header per HTTP/2 compatibility)
 RUN echo 'server { \
     listen ${PORT}; \
     \
-    # Percorsi Telemetria e Auth -> Flask \
     location ~* ^/(telemetrydata|update-telemetry|callback|.well-known) { \
         proxy_pass http://127.0.0.1:5000; \
         proxy_set_header Host $host; \
     } \
     \
-    # Tutto il resto -> Proxy Tesla \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
         proxy_http_version 1.1; \
-        proxy_set_header Upgrade $http_upgrade; \
-        proxy_set_header Connection "upgrade"; \
-        proxy_set_header Host $host; \
         \
-        # PASSAGGIO CRUCIALE: Passa l header Authorization cosi com e \
+        # FIX PER HTTP/2: Rimuove header Connection/Upgrade che Tesla rifiuta \
+        proxy_set_header Connection ""; \
+        proxy_set_header Upgrade ""; \
+        \
+        proxy_set_header Host $host; \
         proxy_set_header Authorization $http_authorization; \
         proxy_pass_header Authorization; \
-        \
-        # Disabilita il buffering per evitare timeout nei comandi \
         proxy_buffering off; \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
-# 3. SCRIPT DI AVVIO
+# 3. START SCRIPT
 RUN printf "#!/bin/bash\n\
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'\n\
 mkdir -p /var/www/html\n\
@@ -74,5 +73,4 @@ nginx\n\
 python3 /app/telemetry_manager.py & \n\
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
 
-EXPOSE 10000
 ENTRYPOINT ["/bin/bash", "/app/start.sh"]
