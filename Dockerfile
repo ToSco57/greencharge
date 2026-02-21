@@ -1,4 +1,4 @@
-# TELEMETRIA: Supporto VIN, Cadence e Configurazione Campi
+# TELEMETRIA & PROXY: Configurazione Snella (Go per Comandi, Python per Storage)
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -13,43 +13,42 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA (Aggiornato per VIN e Cadence)
+# 1. MANAGER TELEMETRIA (Database in RAM per i Webhook)
 RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
 import datetime, os\n\
 app = Flask(__name__)\n\
 data_store = {}\n\
+\n\
 @app.route("/telemetrydata")\n\
 def get_data():\n\
     vin = request.args.get("vin")\n\
     if vin and vin in data_store: return jsonify(data_store[vin])\n\
-    return jsonify(data_store) if not vin else (jsonify({"error": "VIN not found"}), 404)\n\
+    return jsonify({"error": "No data for this VIN"}), 404\n\
+\n\
 @app.route("/update-telemetry", methods=["POST"])\n\
 def update():\n\
     global data_store\n\
     content = request.json\n\
     if not content: return "No content", 400\n\
-    vin = content.get("vin")\n\
+    # Tesla invia spesso il VIN come "vin" o "device_id"\n\
+    vin = content.get("vin") or content.get("device_id")\n\
     if not vin: return "Missing VIN", 400\n\
-    if vin not in data_store:\n\
-        data_store[vin] = {"battery_level": 0, "charge_current": 0, "charge_voltage": 0, "time_to_full": 0, "state": "offline", "cadence": 0, "last_update": None}\n\
-    # Se arriva una configurazione (fields) o un dato reale, aggiorniamo\n\
-    data_store[vin].update({\n\
-        "battery_level": content.get("Soc", data_store[vin]["battery_level"]),\n\
-        "charge_current": content.get("ChargerActualCurrent", data_store[vin]["charge_current"]),\n\
-        "charge_voltage": content.get("ChargerVoltage", data_store[vin]["charge_voltage"]),\n\
-        "time_to_full": content.get("MinutesToFullCharge", data_store[vin]["time_to_full"]),\n\
-        "state": content.get("state", data_store[vin]["state"]),\n\
-        "cadence": content.get("cadence", data_store[vin]["cadence"]),\n\
-        "last_update": datetime.datetime.now().isoformat()\n\
-    })\n\
+    \n\
+    if vin not in data_store: data_store[vin] = {}\n\
+    \n\
+    # Aggiorna i dati ricevuti (Soc, ChargerActualCurrent, ecc.)\n\
+    data_store[vin].update(content)\n\
+    data_store[vin]["last_update"] = datetime.datetime.now().isoformat()\n\
     return "OK", 200\n\
-@app.route("/.well-known/appspecific/com.tesla.3p.json")\n\
-def serve_json(): return send_from_directory("/var/www/html", "tesla.json")\n\
+\n\
 @app.route("/callback")\n\
 def callback():\n\
     code = request.args.get("code")\n\
-    if code: return f"<html><script>window.location.href=\"greencharge://auth?code={code}\";</script></html>", 200\n\
-    return "Missing code", 400\n\
+    return f"<html><script>window.location.href=\\"greencharge://auth?code={code}\\";</script></html>", 200\n\
+\n\
+@app.route("/.well-known/appspecific/com.tesla.3p.json")\n\
+def serve_json(): return send_from_directory("/var/www/html", "tesla.json")\n\
+\n\
 if __name__ == "__main__":\n\
     app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 
