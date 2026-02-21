@@ -13,34 +13,45 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA (Database in RAM per i Webhook)
+# 1. MANAGER TELEMETRIA + COMANDI (Aggiornato)
 RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
-import datetime, os\n\
+import datetime, os, subprocess\n\
 app = Flask(__name__)\n\
 data_store = {}\n\
+\n\
+@app.route("/send-command", methods=["POST"])\n\
+def send_command():\n\
+    content = request.json\n\
+    vin = content.get("vin")\n\
+    # Esempio: "telemetry-subscribe https://gc-53r0.onrender.com/update-telemetry Soc ChargerVoltage"\n\
+    cmd_args = content.get("command_args", [])\n\
+    \n\
+    # Costruiamo il comando per tesla-control\n\
+    full_cmd = ["tesla-control", "-vin", vin, "-ble=false"] + cmd_args\n\
+    try:\n\
+        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15)\n\
+        return jsonify({"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode})\n\
+    except Exception as e:\n\
+        return jsonify({"error": str(e)}), 500\n\
 \n\
 @app.route("/telemetrydata")\n\
 def get_data():\n\
     vin = request.args.get("vin")\n\
-    if vin and vin in data_store: return jsonify(data_store[vin])\n\
-    return jsonify({"error": "No data for this VIN"}), 404\n\
+    return jsonify(data_store.get(vin, {"error": "No data"}))\n\
 \n\
 @app.route("/update-telemetry", methods=["POST"])\n\
 def update():\n\
-    global data_store\n\
     content = request.json\n\
-    if not content: return "No content", 400\n\
-    # Tesla invia spesso il VIN come "vin" o "device_id"\n\
     vin = content.get("vin") or content.get("device_id")\n\
-    if not vin: return "Missing VIN", 400\n\
-    \n\
-    if vin not in data_store: data_store[vin] = {}\n\
-    \n\
-    # Aggiorna i dati ricevuti (Soc, ChargerActualCurrent, ecc.)\n\
-    data_store[vin].update(content)\n\
-    data_store[vin]["last_update"] = datetime.datetime.now().isoformat()\n\
+    if vin:\n\
+        if vin not in data_store: data_store[vin] = {}\n\
+        data_store[vin].update(content)\n\
+        data_store[vin]["last_update"] = datetime.datetime.now().isoformat()\n\
     return "OK", 200\n\
 \n\
+# ... (restante codice callback e .well-known) ...\n\
+if __name__ == "__main__":\n\
+    app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
 @app.route("/callback")\n\
 def callback():\n\
     code = request.args.get("code")\n\
