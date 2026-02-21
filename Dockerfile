@@ -27,23 +27,26 @@ def send_telemetry_command():
     content = request.json
     vin = content.get('vin')
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    args = content.get('args', [])
+    user_args = content.get('args', [])
     
-    # Costruiamo il comando in modo esplicito
-    # L'ordine DEVE essere: binario -> flag globali -> comando -> argomenti comando
-    full_cmd = ['tesla-control']
-    full_cmd += ['-vin', vin]
-    full_cmd += ['-ble=false']
-    full_cmd += args  # Qui args deve essere ["telemetry-subscribe", "URL", ...]
+    # Costruiamo il comando con il percorso assoluto
+    full_cmd = ['/usr/local/bin/tesla-control', '-vin', vin, '-ble=false'] + user_args
     
     env = os.environ.copy()
     env['TESLA_AUTH_TOKEN'] = token
     
-    print(f"DEBUG: Eseguo comando: {' '.join(full_cmd)}") # Vedrai questo nei log di Render
+    # Importante per il debug su Render
+    print(f"DEBUG EXEC: {' '.join(full_cmd)}") 
     
     try:
-        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)
-        return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})
+        # Aumentiamo leggermente il timeout a 20 per dare tempo alla flotta Tesla di rispondere
+        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=20, env=env)
+        return jsonify({
+            'stdout': res.stdout, 
+            'stderr': res.stderr, 
+            'code': res.returncode,
+            'cmd': ' '.join(full_cmd) # Ti restituisce il comando eseguito per verifica
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
         
