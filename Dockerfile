@@ -1,4 +1,4 @@
-# TELEMETRIA & PROXY: Versione Ibrida Ottimizzata (Go + Python Bridge)
+# TELEMETRIA & PROXY: Versione Ibrida Stabile (Fix Heredoc)
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -13,53 +13,60 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + BRIDGE CLI (Scrittura file Python sicura)
-RUN printf "from flask import Flask, jsonify, request, send_from_directory\n\
-import datetime, os, subprocess\n\
-app = Flask(__name__)\n\
-data_store = {}\n\
-\n\
-@app.route('/send-telemetry-command', methods=['POST'])\n\
-def send_telemetry_command():\n\
-    content = request.json\n\
-    vin = content.get('vin')\n\
-    token = request.headers.get('Authorization', '').replace('Bearer ', '')\n\
-    args = content.get('args', [])\n\
-    env = os.environ.copy()\n\
-    env['TESLA_AUTH_TOKEN'] = token\n\
-    # Esegue tesla-control direttamente per bypassare i limiti del proxy HTTP\n\
-    full_cmd = ['tesla-control', '-vin', vin, '-ble=false'] + args\n\
-    try:\n\
-        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)\n\
-        return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})\n\
-    except Exception as e: return jsonify({'error': str(e)}), 500\n\
-\n\
-@app.route('/telemetrydata')\n\
-def get_data():\n\
-    vin = request.args.get('vin')\n\
-    if vin and vin in data_store: return jsonify(data_store[vin])\n\
-    return jsonify(data_store) if not vin else (jsonify({'error': 'VIN not found'}), 404)\n\
-\n\
-@app.route('/update-telemetry', methods=['POST'])\n\
-def update():\n\
-    content = request.json\n\
-    vin = content.get('vin') or content.get('device_id')\n\
-    if vin:\n\
-        if vin not in data_store: data_store[vin] = {}\n\
-        data_store[vin].update(content)\n\
-        data_store[vin]['last_update'] = datetime.datetime.now().isoformat()\n\
-    return 'OK', 200\n\
-\n\
-@app.route('/callback')\n\
-def callback():\n\
-    code = request.args.get('code')\n\
-    return f'<html><script>window.location.href=\"greencharge://auth?code={code}\";</script></html>', 200\n\
-\n\
-@app.route('/.well-known/appspecific/com.tesla.3p.json')\n\
-def serve_json(): return send_from_directory('/var/www/html', 'tesla.json')\n\
-\n\
-if __name__ == '__main__':\n\
-    app.run(host='127.0.0.1', port=5000)" > /app/telemetry_manager.py
+# 1. MANAGER TELEMETRIA + BRIDGE CLI
+# Usiamo EOF per evitare errori di virgolette (unterminated string)
+RUN cat <<-'EOF' > /app/telemetry_manager.py
+from flask import Flask, jsonify, request, send_from_directory
+import datetime, os, subprocess
+
+app = Flask(__name__)
+data_store = {}
+
+@app.route('/send-telemetry-command', methods=['POST'])
+def send_telemetry_command():
+    content = request.json
+    vin = content.get('vin')
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    args = content.get('args', [])
+    env = os.environ.copy()
+    env['TESLA_AUTH_TOKEN'] = token
+    # Comando CLI per bypassare i limiti del proxy HTTP
+    full_cmd = ['tesla-control', '-vin', vin, '-ble=false'] + args
+    try:
+        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)
+        return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/telemetrydata')
+def get_data():
+    vin = request.args.get('vin')
+    if vin and vin in data_store:
+        return jsonify(data_store[vin])
+    return jsonify(data_store)
+
+@app.route('/update-telemetry', methods=['POST'])
+def update():
+    content = request.json
+    vin = content.get('vin') or content.get('device_id')
+    if vin:
+        if vin not in data_store: data_store[vin] = {}
+        data_store[vin].update(content)
+        data_store[vin]['last_update'] = datetime.datetime.now().isoformat()
+    return "OK", 200
+
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    return f'<html><script>window.location.href="greencharge://auth?code={code}";</script></html>', 200
+
+@app.route('/.well-known/appspecific/com.tesla.3p.json')
+def serve_json():
+    return send_from_directory('/var/www/html', 'tesla.json')
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000)
+EOF
 
 # 2. CONFIGURAZIONE NGINX
 RUN echo 'server { \
@@ -82,16 +89,19 @@ RUN echo 'server { \
 }' > /etc/nginx/http.d/default.conf.template
 
 # 3. START SCRIPT
-RUN printf "#!/bin/bash\n\
-openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'\n\
-mkdir -p /var/www/html\n\
-envsubst '\${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf\n\
-if [ -f /etc/secrets/public.pem ]; then \n\
-    PUB_KEY=\$(grep -v '-' /etc/secrets/public.pem | tr -d '\\\\n\\\\r'); \n\
-    echo \"{\\\"domain\\\":\\\"gc-53r0.onrender.com\\\",\\\"public_key\\\":\\\"\$PUB_KEY\\\"}\" > /var/www/html/tesla.json; \n\
-fi\n\
-nginx\n\
-python3 /app/telemetry_manager.py & \n\
-exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
+RUN cat <<-'EOF' > /app/start.sh
+#!/bin/bash
+openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'
+mkdir -p /var/www/html
+envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
+if [ -f /etc/secrets/public.pem ]; then
+    PUB_KEY=$(grep -v '-' /etc/secrets/public.pem | tr -d '\n\r')
+    echo "{\"domain\":\"gc-53r0.onrender.com\",\"public_key\":\"$PUB_KEY\"}" > /var/www/html/tesla.json
+fi
+nginx
+python3 /app/telemetry_manager.py &
+exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose
+EOF
 
-ENTRYPOINT ["/bin/
+RUN chmod +x /app/start.sh
+ENTRYPOINT ["/bin/bash", "/app/start.sh"]
