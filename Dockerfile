@@ -1,4 +1,4 @@
-# TELEMETRIA & PROXY: Configurazione Snella (Go per Comandi, Python per Storage)
+# TELEMETRIA & PROXY: Versione Ibrida Ottimizzata (Go + Python Bridge)
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -13,65 +13,61 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + COMANDI (Aggiornato)
-RUN printf 'from flask import Flask, jsonify, request, send_from_directory\n\
+# 1. MANAGER TELEMETRIA + BRIDGE CLI (Scrittura file Python sicura)
+RUN printf "from flask import Flask, jsonify, request, send_from_directory\n\
 import datetime, os, subprocess\n\
 app = Flask(__name__)\n\
 data_store = {}\n\
 \n\
-@app.route("/send-command", methods=["POST"])\n\
-def send_command():\n\
+@app.route('/send-telemetry-command', methods=['POST'])\n\
+def send_telemetry_command():\n\
     content = request.json\n\
-    vin = content.get("vin")\n\
-    # Esempio: "telemetry-subscribe https://gc-53r0.onrender.com/update-telemetry Soc ChargerVoltage"\n\
-    cmd_args = content.get("command_args", [])\n\
-    \n\
-    # Costruiamo il comando per tesla-control\n\
-    full_cmd = ["tesla-control", "-vin", vin, "-ble=false"] + cmd_args\n\
+    vin = content.get('vin')\n\
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')\n\
+    args = content.get('args', [])\n\
+    env = os.environ.copy()\n\
+    env['TESLA_AUTH_TOKEN'] = token\n\
+    # Esegue tesla-control direttamente per bypassare i limiti del proxy HTTP\n\
+    full_cmd = ['tesla-control', '-vin', vin, '-ble=false'] + args\n\
     try:\n\
-        result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15)\n\
-        return jsonify({"stdout": result.stdout, "stderr": result.stderr, "code": result.returncode})\n\
-    except Exception as e:\n\
-        return jsonify({"error": str(e)}), 500\n\
+        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)\n\
+        return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})\n\
+    except Exception as e: return jsonify({'error': str(e)}), 500\n\
 \n\
-@app.route("/telemetrydata")\n\
+@app.route('/telemetrydata')\n\
 def get_data():\n\
-    vin = request.args.get("vin")\n\
-    return jsonify(data_store.get(vin, {"error": "No data"}))\n\
+    vin = request.args.get('vin')\n\
+    if vin and vin in data_store: return jsonify(data_store[vin])\n\
+    return jsonify(data_store) if not vin else (jsonify({'error': 'VIN not found'}), 404)\n\
 \n\
-@app.route("/update-telemetry", methods=["POST"])\n\
+@app.route('/update-telemetry', methods=['POST'])\n\
 def update():\n\
     content = request.json\n\
-    vin = content.get("vin") or content.get("device_id")\n\
+    vin = content.get('vin') or content.get('device_id')\n\
     if vin:\n\
         if vin not in data_store: data_store[vin] = {}\n\
         data_store[vin].update(content)\n\
-        data_store[vin]["last_update"] = datetime.datetime.now().isoformat()\n\
-    return "OK", 200\n\
+        data_store[vin]['last_update'] = datetime.datetime.now().isoformat()\n\
+    return 'OK', 200\n\
 \n\
-# ... (restante codice callback e .well-known) ...\n\
-if __name__ == "__main__":\n\
-    app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
-@app.route("/callback")\n\
+@app.route('/callback')\n\
 def callback():\n\
-    code = request.args.get("code")\n\
-    return f"<html><script>window.location.href=\\"greencharge://auth?code={code}\\";</script></html>", 200\n\
+    code = request.args.get('code')\n\
+    return f'<html><script>window.location.href=\"greencharge://auth?code={code}\";</script></html>', 200\n\
 \n\
-@app.route("/.well-known/appspecific/com.tesla.3p.json")\n\
-def serve_json(): return send_from_directory("/var/www/html", "tesla.json")\n\
+@app.route('/.well-known/appspecific/com.tesla.3p.json')\n\
+def serve_json(): return send_from_directory('/var/www/html', 'tesla.json')\n\
 \n\
-if __name__ == "__main__":\n\
-    app.run(host="127.0.0.1", port=5000)' > /app/telemetry_manager.py
+if __name__ == '__main__':\n\
+    app.run(host='127.0.0.1', port=5000)" > /app/telemetry_manager.py
 
 # 2. CONFIGURAZIONE NGINX
 RUN echo 'server { \
     listen ${PORT}; \
-    \
-    location ~* ^/(telemetrydata|update-telemetry|callback|.well-known) { \
+    location ~* ^/(telemetrydata|update-telemetry|callback|.well-known|send-telemetry-command) { \
         proxy_pass http://127.0.0.1:5000; \
         proxy_set_header Host $host; \
     } \
-    \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
@@ -98,4 +94,4 @@ nginx\n\
 python3 /app/telemetry_manager.py & \n\
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose" > /app/start.sh && chmod +x /app/start.sh
 
-ENTRYPOINT ["/bin/bash", "/app/start.sh"]
+ENTRYPOINT ["/bin/
