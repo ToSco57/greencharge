@@ -28,19 +28,25 @@ def send_telemetry_command():
     vin = content.get('vin')
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     args = content.get('args', [])
+    
+    # Costruiamo il comando in modo esplicito
+    # L'ordine DEVE essere: binario -> flag globali -> comando -> argomenti comando
+    full_cmd = ['tesla-control']
+    full_cmd += ['-vin', vin]
+    full_cmd += ['-ble=false']
+    full_cmd += args  # Qui args deve essere ["telemetry-subscribe", "URL", ...]
+    
     env = os.environ.copy()
     env['TESLA_AUTH_TOKEN'] = token
-    # Comando CLI per bypassare i limiti del proxy HTTP
-    env = os.environ.copy()
-    env['TESLA_AUTH_TOKEN'] = token
-    # Costruiamo il comando: [binario, flag globale vin, flag globale ble, comando, argomenti comando]
-    full_cmd = ['tesla-control', '-vin', vin, '-ble=false'] + args
+    
+    print(f"DEBUG: Eseguo comando: {' '.join(full_cmd)}") # Vedrai questo nei log di Render
+    
     try:
         res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)
         return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
+        
 @app.route('/telemetrydata')
 def get_data():
     vin = request.args.get('vin')
