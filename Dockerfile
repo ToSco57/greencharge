@@ -31,6 +31,9 @@ def send_telemetry_command():
     env = os.environ.copy()
     env['TESLA_AUTH_TOKEN'] = token
     # Comando CLI per bypassare i limiti del proxy HTTP
+    env = os.environ.copy()
+    env['TESLA_AUTH_TOKEN'] = token
+    # Costruiamo il comando: [binario, flag globale vin, flag globale ble, comando, argomenti comando]
     full_cmd = ['tesla-control', '-vin', vin, '-ble=false'] + args
     try:
         res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15, env=env)
