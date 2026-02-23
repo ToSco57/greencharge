@@ -1,4 +1,4 @@
-# TELEMETRIA & PROXY: Versione Ibrida Stabile (Fix Heredoc)
+# --- STAGE 1: Builder ---
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
 RUN git clone https://github.com/teslamotors/vehicle-command.git /app
@@ -6,6 +6,7 @@ WORKDIR /app
 RUN go install ./cmd/tesla-http-proxy
 RUN go install ./cmd/tesla-control
 
+# --- STAGE 2: Runtime ---
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates openssl nginx python3 py3-flask py3-requests bash gettext
 
@@ -13,8 +14,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + BRIDGE CLI
-# Usiamo EOF per evitare errori di virgolette (unterminated string)
+# 1. MANAGER TELEMETRIA + BRIDGE CLI (Python)
 RUN cat <<-'EOF' > /app/telemetry_manager.py
 from flask import Flask, jsonify, request, send_from_directory
 import datetime, os, subprocess
@@ -29,27 +29,23 @@ def send_telemetry_command():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     user_args = content.get('args', [])
     
-    # Costruiamo il comando con il percorso assoluto
     full_cmd = ['/usr/local/bin/tesla-control', '-vin', vin, '-ble=false'] + user_args
-    
     env = os.environ.copy()
     env['TESLA_AUTH_TOKEN'] = token
     
-    # Importante per il debug su Render
     print(f"DEBUG EXEC: {' '.join(full_cmd)}") 
     
     try:
-        # Aumentiamo leggermente il timeout a 20 per dare tempo alla flotta Tesla di rispondere
         res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=20, env=env)
         return jsonify({
             'stdout': res.stdout, 
             'stderr': res.stderr, 
             'code': res.returncode,
-            'cmd': ' '.join(full_cmd) # Ti restituisce il comando eseguito per verifica
+            'cmd': ' '.join(full_cmd)
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-        
+
 @app.route('/telemetrydata')
 def get_data():
     vin = request.args.get('vin')
@@ -72,9 +68,14 @@ def callback():
     code = request.args.get('code')
     return f'<html><script>window.location.href="greencharge://auth?code={code}";</script></html>', 200
 
+# ROTTE CRITICHE PER VALIDAZIONE TESLA
 @app.route('/.well-known/appspecific/com.tesla.3p.json')
 def serve_json():
     return send_from_directory('/var/www/html', 'tesla.json')
+
+@app.route('/.well-known/appspecific/com.tesla.3p.public-key.pem')
+def serve_public_key():
+    return send_from_directory('/var/www/html', 'com.tesla.3p.public-key.pem')
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000)
@@ -100,16 +101,26 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
-# 3. START SCRIPT
+# 3. START SCRIPT (Generazione chiavi e avvio)
 RUN cat <<-'EOF' > /app/start.sh
 #!/bin/bash
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'
 mkdir -p /var/www/html
 envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
+
 if [ -f /etc/secrets/public.pem ]; then
+    # Genera JSON per validazione dominio
     PUB_KEY=$(grep -v '-' /etc/secrets/public.pem | tr -d '\n\r')
     echo "{\"domain\":\"gc-53r0.onrender.com\",\"public_key\":\"$PUB_KEY\"}" > /var/www/html/tesla.json
+    
+    # Copia PEM per validazione telemetria (Risolve il 404)
+    cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem
+    
+    echo "✅ Chiavi configurate correttamente."
+else
+    echo "❌ ATTENZIONE: /etc/secrets/public.pem non trovato!"
 fi
+
 nginx
 python3 /app/telemetry_manager.py &
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose
