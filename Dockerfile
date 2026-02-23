@@ -74,9 +74,13 @@ def serve_json():
     return send_from_directory('/var/www/html', 'tesla.json')
 
 @app.route('/.well-known/appspecific/com.tesla.3p.public-key.pem')
-def serve_public_key():
-    return send_from_directory('/var/www/html', 'com.tesla.3p.public-key.pem')
-
+def serve_pem():
+    try:
+        # Assicurati che il file esista in questa cartella
+        return send_from_directory('/var/www/html', 'com.tesla.3p.public-key.pem', mimetype='application/x-pem-file'), 200
+    except Exception as e:
+        return str(e), 404
+        
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000)
 EOF
@@ -84,7 +88,7 @@ EOF
 # 2. CONFIGURAZIONE NGINX
 RUN echo 'server { \
     listen ${PORT}; \
-    location ~* ^/(telemetrydata|update-telemetry|callback|.well-known|send-telemetry-command) { \
+    location ~* ^/(\.well-known|telemetrydata|update-telemetry|callback|send-telemetry-command) { \
         proxy_pass http://127.0.0.1:5000; \
         proxy_set_header Host $host; \
     } \
