@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 COPY --from=builder /go/bin/tesla-control /usr/local/bin/
 
-# 1. MANAGER TELEMETRIA + BRIDGE CLI (Python)
+# 1. MANAGER TELEMETRIA + BRIDGE CLI
 RUN cat <<-'EOF' > /app/telemetry_manager.py
 from flask import Flask, jsonify, request, send_from_directory
 import datetime, os, subprocess
@@ -28,30 +28,14 @@ def send_telemetry_command():
     vin = content.get('vin')
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     user_args = content.get('args', [])
-    
     full_cmd = ['/usr/local/bin/tesla-control', '-vin', vin, '-ble=false'] + user_args
     env = os.environ.copy()
     env['TESLA_AUTH_TOKEN'] = token
-    
-    print(f"DEBUG EXEC: {' '.join(full_cmd)}") 
-    
     try:
         res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=20, env=env)
-        return jsonify({
-            'stdout': res.stdout, 
-            'stderr': res.stderr, 
-            'code': res.returncode,
-            'cmd': ' '.join(full_cmd)
-        })
+        return jsonify({'stdout': res.stdout, 'stderr': res.stderr, 'code': res.returncode})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-@app.route('/telemetrydata')
-def get_data():
-    vin = request.args.get('vin')
-    if vin and vin in data_store:
-        return jsonify(data_store[vin])
-    return jsonify(data_store)
 
 @app.route('/update-telemetry', methods=['POST'])
 def update():
@@ -63,35 +47,35 @@ def update():
         data_store[vin]['last_update'] = datetime.datetime.now().isoformat()
     return "OK", 200
 
+@app.route('/.well-known/appspecific/com.tesla.3p.json')
+def serve_json():
+    return send_from_directory('/var/www/html', 'tesla.json', mimetype='application/json'), 200
+
+@app.route('/.well-known/appspecific/com.tesla.3p.public-key.pem')
+def serve_pem():
+    return send_from_directory('/var/www/html', 'com.tesla.3p.public-key.pem', mimetype='application/x-pem-file'), 200
+
 @app.route('/callback')
 def callback():
     code = request.args.get('code')
     return f'<html><script>window.location.href="greencharge://auth?code={code}";</script></html>', 200
 
-# ROTTE CRITICHE PER VALIDAZIONE TESLA
-@app.route('/.well-known/appspecific/com.tesla.3p.json')
-def serve_json():
-    return send_from_directory('/var/www/html', 'tesla.json')
-
-@app.route('/.well-known/appspecific/com.tesla.3p.public-key.pem')
-def serve_pem():
-    try:
-        # Assicurati che il file esista in questa cartella
-        return send_from_directory('/var/www/html', 'com.tesla.3p.public-key.pem', mimetype='application/x-pem-file'), 200
-    except Exception as e:
-        return str(e), 404
-        
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000)
 EOF
 
-# 2. CONFIGURAZIONE NGINX
+# 2. CONFIGURAZIONE NGINX (Priorità Corretta)
 RUN echo 'server { \
     listen ${PORT}; \
+    \
+    # Priorità 1: Rotte critiche (Flask) \
     location ~* ^/(\.well-known|telemetrydata|update-telemetry|callback|send-telemetry-command) { \
         proxy_pass http://127.0.0.1:5000; \
         proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
     } \
+    \
+    # Priorità 2: Tutto il resto (Proxy Go) \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
@@ -105,7 +89,7 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
-# 3. START SCRIPT (Generazione chiavi e avvio)
+# 3. START SCRIPT
 RUN cat <<-'EOF' > /app/start.sh
 #!/bin/bash
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout /app/tls.key -out /app/tls.crt -days 365 -subj '/CN=localhost'
@@ -113,16 +97,9 @@ mkdir -p /var/www/html
 envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
 
 if [ -f /etc/secrets/public.pem ]; then
-    # Genera JSON per validazione dominio
     PUB_KEY=$(grep -v '-' /etc/secrets/public.pem | tr -d '\n\r')
     echo "{\"domain\":\"gc-53r0.onrender.com\",\"public_key\":\"$PUB_KEY\"}" > /var/www/html/tesla.json
-    
-    # Copia PEM per validazione telemetria (Risolve il 404)
     cp /etc/secrets/public.pem /var/www/html/com.tesla.3p.public-key.pem
-    
-    echo "✅ Chiavi configurate correttamente."
-else
-    echo "❌ ATTENZIONE: /etc/secrets/public.pem non trovato!"
 fi
 
 nginx
