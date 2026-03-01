@@ -12,28 +12,30 @@ RUN apk add --no-cache ca-certificates openssl nginx bash gettext
 WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# 1. CONFIGURAZIONE NGINX (Con redirect diretto per il callback)
-RUN echo 'server { \
+# 1. CONFIGURAZIONE NGINX CON LOG DELLE RISPOSTE
+# Abbiamo aggiunto 'log_format' per catturare lo stato e la risposta
+RUN echo 'log_format tesla_log "[$time_local] $request $status body: $upstream_response_time"; \
+server { \
     listen ${PORT}; \
+    access_log /dev/stdout tesla_log; \
     \
-    # Gestione Autenticazione: Redirect diretto all app senza passare per Flask \
     location /callback { \
         return 302 "greencharge://auth/callback?code=$arg_code&state=$arg_state"; \
     } \
     \
-    # Pairing delle chiavi \
     location /.well-known/appspecific/ { \
         root /var/www/html; \
         location ~* \.json$ { add_header Content-Type application/json; } \
         location ~* \.pem$  { add_header Content-Type application/x-pem-file; } \
     } \
     \
-    # Tutto il resto al Proxy Go \
     location / { \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
         proxy_http_version 1.1; \
         proxy_set_header Host $host; \
+        # Mostra gli header di risposta nei log per il debug \
+        proxy_pass_header Server; \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
@@ -51,7 +53,9 @@ if [ -f /etc/secrets/public.pem ]; then
 fi
 chmod -R 755 /var/www/html
 
+# Avviamo nginx in background e tesla-http-proxy in foreground
 nginx
+# Il flag -verbose stamperà i dettagli della richiesta inviata
 exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -tls-key /app/tls.key -cert /app/tls.crt -verbose
 EOF
 
