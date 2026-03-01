@@ -38,17 +38,15 @@ RUN echo 'server { \
         proxy_ssl_verify off; \
         proxy_http_version 1.1; \
         proxy_set_header Host $host; \
-        proxy_set_header X-Real-IP $remote_addr; \
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
     } \
 }' > /etc/nginx/http.d/default.conf.template
 
 # 2. START SCRIPT
 RUN cat <<-'EOF' > /app/start.sh
 #!/bin/bash
-# Creiamo i file TLS espliciti per evitare l'errore "no such file or directory"
+# Creiamo i certificati TLS espliciti
 openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -keyout /app/proxy-tls.key -out /app/proxy-tls.crt \
+    -keyout /app/proxy.key -out /app/proxy.crt \
     -days 365 -subj '/CN=localhost'
 
 mkdir -p /var/www/html/.well-known/appspecific/
@@ -63,43 +61,15 @@ fi
 chmod -R 755 /var/www/html
 nginx
 
-echo "[LOG] Avvio tesla-http-proxy con certificati locali..."
-# Usiamo i file appena creati. Assicurati che /etc/secrets/private.pem esista su Render!
-exec tesla-http-proxy -port 10001 -host 127.0.0.1 \
+echo "[LOG] Avvio tesla-http-proxy..."
+# ATTENZIONE: i flag corretti sono -tls-key e -tls-cert
+exec tesla-http-proxy \
+    -port 10001 \
+    -host 127.0.0.1 \
     -key-file /etc/secrets/private.pem \
-    -tls-key /app/proxy-tls.key \
-    -tls-cert /app/proxy-tls.crt \
+    -tls-key /app/proxy.key \
+    -tls-cert /app/proxy.crt \
     -verbose
-EOF
-
-RUN chmod +x /app/start.sh
-ENTRYPOINT ["/bin/bash", "/app/start.sh"]    location / { \
-        # Passiamo in HTTP al proxy per evitare errori di handshake interni \
-        proxy_pass http://127.0.0.1:10001; \
-        proxy_http_version 1.1; \
-        proxy_set_header Host $host; \
-        proxy_set_header X-Real-IP $remote_addr; \
-    } \
-}' > /etc/nginx/http.d/default.conf.template
-
-# 2. START SCRIPT
-RUN cat <<-'EOF' > /app/start.sh
-#!/bin/bash
-mkdir -p /var/www/html/.well-known/appspecific/
-envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
-
-if [ -f /etc/secrets/public.pem ]; then
-    PUB_KEY=$(grep -v '-' /etc/secrets/public.pem | tr -d '\n\r')
-    echo "{\"domain\":\"gc-53r0.onrender.com\",\"public_key\":\"$PUB_KEY\"}" > /var/www/html/.well-known/appspecific/com.tesla.3p.json
-    cp /etc/secrets/public.pem /var/www/html/.well-known/appspecific/com.tesla.3p.public-key.pem
-fi
-
-chmod -R 755 /var/www/html
-nginx
-
-echo "[LOG] Sistema pronto. Proxy in ascolto su HTTP 10001 (Internal)"
-# Rimosso -tls-key e -cert per parlare in HTTP con Nginx localmente
-exec tesla-http-proxy -port 10001 -host 127.0.0.1 -key-file /etc/secrets/private.pem -verbose
 EOF
 
 RUN chmod +x /app/start.sh
