@@ -1,3 +1,5 @@
+#Version 1.0 Gestione comandi firmati e chiavi per teslaproxy
+
 # --- STAGE 1: Builder ---
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git
