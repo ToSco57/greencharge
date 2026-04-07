@@ -1,4 +1,5 @@
 #Version 1.0 Gestione comandi firmati e chiavi per teslaproxy
+#Version 1.1 - Aggiunto controllo SECURE_KEY tramite Nginx
 
 # --- STAGE 1: Builder ---
 FROM golang:1.23-alpine AS builder
@@ -14,7 +15,7 @@ RUN apk add --no-cache ca-certificates openssl nginx bash gettext
 WORKDIR /app
 COPY --from=builder /go/bin/tesla-http-proxy /usr/local/bin/
 
-# 1. CONFIGURAZIONE NGINX
+# 1. CONFIGURAZIONE NGINX CON CONTROLLO CHIAVE
 RUN echo 'server { \
     listen ${PORT}; \
     \
@@ -36,6 +37,12 @@ RUN echo 'server { \
     } \
     \
     location / { \
+        # --- LOGICA DI SICUREZZA --- \
+        # Verifichiamo che l header X-Proxy-Secure-Key sia uguale alla variabile ENV \
+        if ($http_x_proxy_secure_key != "${SECURE_KEY}") { \
+            return 401 "Unauthorized: Invalid Security Key"; \
+        } \
+        \
         proxy_pass https://127.0.0.1:10001; \
         proxy_ssl_verify off; \
         proxy_http_version 1.1; \
@@ -53,7 +60,9 @@ openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -days 365 -subj '/CN=localhost'
 
 mkdir -p /var/www/html/.well-known/appspecific/
-envsubst '${PORT}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
+
+# Ora iniettiamo sia PORT che SECURE_KEY nella configurazione Nginx
+envsubst '${PORT} ${SECURE_KEY}' < /etc/nginx/http.d/default.conf.template > /etc/nginx/http.d/default.conf
 
 if [ -f /etc/secrets/public.pem ]; then
     PUB_KEY=$(grep -v '-' /etc/secrets/public.pem | tr -d '\n\r')
@@ -65,7 +74,6 @@ chmod -R 755 /var/www/html
 nginx
 
 echo "[LOG] Avvio tesla-http-proxy con i flag estratti dal log..."
-# Uso i flag corretti: -cert e -tls-key (come da tuo output)
 exec tesla-http-proxy \
     -port 10001 \
     -host 127.0.0.1 \
